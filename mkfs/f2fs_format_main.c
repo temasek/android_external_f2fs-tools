@@ -58,7 +58,6 @@ static void f2fs_show_info()
 
 	if (config.vol_label)
 		MSG(0, "Info: Label = %s\n", config.vol_label);
-	MSG(0, "Info: Overprovision ratio = %u%%\n", config.overprovision);
 	MSG(0, "Info: Segments per section = %d\n", config.segs_per_sec);
 	MSG(0, "Info: Sections per zone = %d\n", config.secs_per_zone);
 	MSG(0, "Info: Trim is %s\n", config.trim ? "enabled": "disabled");
@@ -125,10 +124,6 @@ static void f2fs_parse_options(int argc, char *argv[])
 		MSG(0, "\ttotal_sectors=%08"PRIx64" (%s bytes)\n",
 				config.total_sectors, argv[optind+1]);
 	}
-
-	config.reserved_segments  =
-			(2 * (100 / config.overprovision + 1) + 6)
-			* config.segs_per_sec;
 	config.segs_per_zone = config.segs_per_sec * config.secs_per_zone;
 }
 
