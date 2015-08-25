@@ -45,9 +45,6 @@ void f2fs_parse_options(int argc, char *argv[])
 	if (!strcmp("fsck.f2fs", prog)) {
 		const char *option_string = "ad:ft";
 
-		MSG(0, "\n\tF2FS-tools: fsck.f2fs Ver: %s (%s)\n\n",
-		    F2FS_TOOLS_VERSION, F2FS_TOOLS_DATE);
-
 		config.func = FSCK;
 		while ((option = getopt(argc, argv, option_string)) != EOF) {
 			switch (option) {
@@ -68,6 +65,7 @@ void f2fs_parse_options(int argc, char *argv[])
 				config.dbg_lv = -1;
 				break;
 			default:
+				MSG(0, "\tError: Unknown option %c\n", option);
 				fsck_usage();
 				break;
 			}
@@ -82,9 +80,6 @@ void f2fs_parse_options(int argc, char *argv[])
 			.end_ssa = -1,
 			.blk_addr = -1,
 		};
-
-		MSG(0, "\n\tF2FS-tools: dump.f2fs Ver: %s (%s)\n\n",
-		    F2FS_TOOLS_VERSION, F2FS_TOOLS_DATE);
 
 		config.func = DUMP;
 		while ((option = getopt(argc, argv, option_string)) != EOF) {
@@ -123,6 +118,7 @@ void f2fs_parse_options(int argc, char *argv[])
 							&dump_opt.blk_addr);
 				break;
 			default:
+				MSG(0, "\tError: Unknown option %c\n", option);
 				dump_usage();
 				break;
 			}
@@ -144,16 +140,20 @@ void f2fs_parse_options(int argc, char *argv[])
 
 static void do_fsck(struct f2fs_sb_info *sbi)
 {
+	struct f2fs_checkpoint *ckpt = F2FS_CKPT(sbi);
+	u32 flag = le32_to_cpu(ckpt->ckpt_flags);
 	u32 blk_cnt;
 
 	fsck_init(sbi);
+
+	print_cp_state(flag);
 
 	fsck_chk_orphan_node(sbi);
 
 	/* Traverse all block recursively from root inode */
 	blk_cnt = 1;
-	fsck_chk_node_blk(sbi, NULL, sbi->root_ino_num,
-			F2FS_FT_DIR, TYPE_INODE, &blk_cnt);
+	fsck_chk_node_blk(sbi, NULL, sbi->root_ino_num, (u8 *)"/",
+			F2FS_FT_DIR, TYPE_INODE, &blk_cnt, NULL);
 	fsck_verify(sbi);
 	fsck_free(sbi);
 }
@@ -161,6 +161,8 @@ static void do_fsck(struct f2fs_sb_info *sbi)
 static void do_dump(struct f2fs_sb_info *sbi)
 {
 	struct dump_option *opt = (struct dump_option *)config.private;
+	struct f2fs_checkpoint *ckpt = F2FS_CKPT(sbi);
+	u32 flag = le32_to_cpu(ckpt->ckpt_flags);
 
 	fsck_init(sbi);
 
@@ -173,9 +175,12 @@ static void do_dump(struct f2fs_sb_info *sbi)
 	if (opt->start_ssa != -1)
 		ssa_dump(sbi, opt->start_ssa, opt->end_ssa);
 	if (opt->blk_addr != -1) {
-		dump_inode_from_blkaddr(sbi, opt->blk_addr);
+		dump_info_from_blkaddr(sbi, opt->blk_addr);
 		goto cleanup;
 	}
+
+	print_cp_state(flag);
+
 	dump_node(sbi, opt->nid);
 cleanup:
 	fsck_free(sbi);

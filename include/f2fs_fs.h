@@ -5,6 +5,9 @@
  *             http://www.samsung.com/
  *
  * Dual licensed under the GPL or LGPL version 2 licenses.
+ *
+ * The byteswap codes are copied from:
+ *   samba_3_master/lib/ccan/endian/endian.h under LGPL 2.1
  */
 #ifndef __F2FS_FS_H__
 #define __F2FS_FS_H__
@@ -15,10 +18,6 @@
 
 #ifdef HAVE_CONFIG_H
 #include <config.h>
-#else
-#ifdef ANDROID
-#include "include/f2fs_version.h"
-#endif
 #endif
 
 typedef u_int64_t	u64;
@@ -29,6 +28,63 @@ typedef u32		block_t;
 typedef u32		nid_t;
 typedef u8		bool;
 typedef unsigned long	pgoff_t;
+
+#if HAVE_BYTESWAP_H
+#include <byteswap.h>
+#else
+/**
+ * bswap_16 - reverse bytes in a uint16_t value.
+ * @val: value whose bytes to swap.
+ *
+ * Example:
+ *	// Output contains "1024 is 4 as two bytes reversed"
+ *	printf("1024 is %u as two bytes reversed\n", bswap_16(1024));
+ */
+static inline uint16_t bswap_16(uint16_t val)
+{
+	return ((val & (uint16_t)0x00ffU) << 8)
+		| ((val & (uint16_t)0xff00U) >> 8);
+}
+
+/**
+ * bswap_32 - reverse bytes in a uint32_t value.
+ * @val: value whose bytes to swap.
+ *
+ * Example:
+ *	// Output contains "1024 is 262144 as four bytes reversed"
+ *	printf("1024 is %u as four bytes reversed\n", bswap_32(1024));
+ */
+static inline uint32_t bswap_32(uint32_t val)
+{
+	return ((val & (uint32_t)0x000000ffUL) << 24)
+		| ((val & (uint32_t)0x0000ff00UL) <<  8)
+		| ((val & (uint32_t)0x00ff0000UL) >>  8)
+		| ((val & (uint32_t)0xff000000UL) >> 24);
+}
+#endif /* !HAVE_BYTESWAP_H */
+
+#if defined HAVE_DECL_BSWAP_64 && !HAVE_DECL_BSWAP_64
+/**
+ * bswap_64 - reverse bytes in a uint64_t value.
+ * @val: value whose bytes to swap.
+ *
+ * Example:
+ *	// Output contains "1024 is 1125899906842624 as eight bytes reversed"
+ *	printf("1024 is %llu as eight bytes reversed\n",
+ *		(unsigned long long)bswap_64(1024));
+ */
+static inline uint64_t bswap_64(uint64_t val)
+{
+	return ((val & (uint64_t)0x00000000000000ffULL) << 56)
+		| ((val & (uint64_t)0x000000000000ff00ULL) << 40)
+		| ((val & (uint64_t)0x0000000000ff0000ULL) << 24)
+		| ((val & (uint64_t)0x00000000ff000000ULL) <<  8)
+		| ((val & (uint64_t)0x000000ff00000000ULL) >>  8)
+		| ((val & (uint64_t)0x0000ff0000000000ULL) >> 24)
+		| ((val & (uint64_t)0x00ff000000000000ULL) >> 40)
+		| ((val & (uint64_t)0xff00000000000000ULL) >> 56);
+}
+#endif
 
 #if __BYTE_ORDER == __LITTLE_ENDIAN
 #define le16_to_cpu(x)	((__u16)(x))
@@ -155,12 +211,13 @@ typedef unsigned long	pgoff_t;
 #define CHECKSUM_OFFSET		4092
 
 /* for mkfs */
-#define F2FS_MIN_VOLUME_SIZE	104857600
 #define	F2FS_NUMBER_OF_CHECKPOINT_PACK	2
 #define	DEFAULT_SECTOR_SIZE		512
 #define	DEFAULT_SECTORS_PER_BLOCK	8
 #define	DEFAULT_BLOCKS_PER_SEGMENT	512
 #define DEFAULT_SEGMENTS_PER_SECTION	1
+
+#define VERSION_LEN	256
 
 enum f2fs_config_func {
 	FSCK,
@@ -174,13 +231,18 @@ struct f2fs_configuration {
 	u_int32_t cur_seg[6];
 	u_int32_t segs_per_sec;
 	u_int32_t secs_per_zone;
+	u_int32_t segs_per_zone;
 	u_int32_t start_sector;
 	u_int64_t total_sectors;
 	u_int32_t sectors_per_blk;
 	u_int32_t blks_per_seg;
+	__u8 init_version[VERSION_LEN + 1];
+	__u8 sb_version[VERSION_LEN + 1];
+	__u8 version[VERSION_LEN + 1];
 	char *vol_label;
+	u_int32_t bytes_reserved;
 	int heap;
-	int32_t fd;
+	int32_t fd, kd;
 	int32_t dump_fd;
 	char *device_name;
 	char *extension_list;
@@ -191,6 +253,7 @@ struct f2fs_configuration {
 	int fix_on;
 	int bug_on;
 	int auto_fix;
+	__le32 feature;			/* defined features */
 } __attribute__((packed));
 
 #ifdef CONFIG_64BIT
@@ -229,8 +292,8 @@ enum {
  * Copied from include/linux/f2fs_sb.h
  */
 #define F2FS_SUPER_OFFSET		1024	/* byte-size offset */
-#define F2FS_LOG_SECTOR_SIZE		9	/* 9 bits for 512 byte */
-#define F2FS_LOG_SECTORS_PER_BLOCK	3	/* 4KB: F2FS_BLKSIZE */
+#define F2FS_MIN_LOG_SECTOR_SIZE	9	/* 9 bits for 512 bytes */
+#define F2FS_MAX_LOG_SECTOR_SIZE	12	/* 12 bits for 4096 bytes */
 #define F2FS_BLKSIZE			4096	/* support only 4KB block */
 #define F2FS_MAX_EXTENSION		64	/* # of extension entries */
 #define F2FS_BLK_ALIGN(x)	(((x) + F2FS_BLKSIZE - 1) / F2FS_BLKSIZE)
@@ -254,6 +317,8 @@ enum {
 #define MAX_ACTIVE_LOGS	16
 #define MAX_ACTIVE_NODE_LOGS	8
 #define MAX_ACTIVE_DATA_LOGS	8
+
+#define F2FS_FEATURE_ENCRYPT	0x0001
 
 /*
  * For superblock
@@ -291,11 +356,18 @@ struct f2fs_super_block {
 	__le32 extension_count;		/* # of extensions below */
 	__u8 extension_list[F2FS_MAX_EXTENSION][8];	/* extension array */
 	__le32 cp_payload;
+	__u8 version[VERSION_LEN];	/* the kernel version */
+	__u8 init_version[VERSION_LEN];	/* the initial kernel version */
+	__le32 feature;			/* defined features */
+	__u8 encryption_level;		/* versioning level for encryption */
+	__u8 encrypt_pw_salt[16];	/* Salt used for string2key algorithm */
+	__u8 reserved[871];		/* valid reserved region */
 } __attribute__((packed));
 
 /*
  * For checkpoint
  */
+#define CP_FASTBOOT_FLAG	0x00000020
 #define CP_FSCK_FLAG		0x00000010
 #define CP_ERROR_FLAG		0x00000008
 #define CP_COMPACT_SUM_FLAG	0x00000004
@@ -371,6 +443,10 @@ struct f2fs_extent {
 
 #define F2FS_INLINE_XATTR	0x01	/* file inline xattr flag */
 #define F2FS_INLINE_DATA	0x02	/* file inline data flag */
+#define F2FS_INLINE_DENTRY	0x04	/* file inline dentry flag */
+#define F2FS_DATA_EXIST		0x08	/* file inline data exist flag */
+#define F2FS_INLINE_DOTS	0x10	/* file having implicit dot dentries */
+
 #define MAX_INLINE_DATA		(sizeof(__le32) * (DEF_ADDRS_PER_INODE - \
 						F2FS_INLINE_XATTR_ADDRS - 1))
 
@@ -378,6 +454,15 @@ struct f2fs_extent {
 				- sizeof(__le32)*(DEF_ADDRS_PER_INODE + 5 - 1))
 
 #define DEF_DIR_LEVEL		0
+
+/*
+ * i_advise uses FADVISE_XXX_BIT. We can add additional hints later.
+ */
+#define FADVISE_COLD_BIT       0x01
+#define FADVISE_LOST_PINO_BIT  0x02
+#define FADVISE_ENCRYPT_BIT    0x04
+
+#define file_is_encrypt(i_advise)      ((i_advise) & FADVISE_ENCRYPT_BIT)
 
 struct f2fs_inode {
 	__le16 i_mode;			/* file mode */
@@ -643,6 +728,24 @@ struct f2fs_dentry_block {
 	__u8 filename[NR_DENTRY_IN_BLOCK][F2FS_SLOT_LEN];
 } __attribute__((packed));
 
+/* for inline dir */
+#define NR_INLINE_DENTRY	(MAX_INLINE_DATA * BITS_PER_BYTE / \
+				((SIZE_OF_DIR_ENTRY + F2FS_SLOT_LEN) * \
+				BITS_PER_BYTE + 1))
+#define INLINE_DENTRY_BITMAP_SIZE	((NR_INLINE_DENTRY + \
+					BITS_PER_BYTE - 1) / BITS_PER_BYTE)
+#define INLINE_RESERVED_SIZE	(MAX_INLINE_DATA - \
+				((SIZE_OF_DIR_ENTRY + F2FS_SLOT_LEN) * \
+				NR_INLINE_DENTRY + INLINE_DENTRY_BITMAP_SIZE))
+
+/* inline directory entry structure */
+struct f2fs_inline_dentry {
+	__u8 dentry_bitmap[INLINE_DENTRY_BITMAP_SIZE];
+	__u8 reserved[INLINE_RESERVED_SIZE];
+	struct f2fs_dir_entry dentry[NR_INLINE_DENTRY];
+	__u8 filename[NR_INLINE_DENTRY][F2FS_SLOT_LEN];
+} __packed;
+
 /* file types used in inode_info->flags */
 enum FILE_TYPE {
 	F2FS_FT_UNKNOWN,
@@ -657,6 +760,7 @@ enum FILE_TYPE {
 	/* added for fsck */
 	F2FS_FT_ORPHAN,
 	F2FS_FT_XATTR,
+	F2FS_FT_LAST_FILE_TYPE = F2FS_FT_XATTR,
 };
 
 /* from f2fs/segment.h */
@@ -698,9 +802,17 @@ extern int dev_fill(void *, __u64, size_t);
 
 extern int dev_read_block(void *, __u64);
 extern int dev_read_blocks(void *, __u64, __u32 );
+extern int dev_reada_block(__u64);
 
+extern int dev_read_version(void *, __u64, size_t);
+extern void get_kernel_version(__u8 *);
 f2fs_hash_t f2fs_dentry_hash(const unsigned char *, int);
 
 extern struct f2fs_configuration config;
+
+#define ALIGN(val, size)	((val) + (size) - 1) / (size)
+#define SEG_ALIGN(blks)		ALIGN(blks, config.blks_per_seg)
+#define ZONE_ALIGN(blks)	ALIGN(blks, config.blks_per_seg * \
+					config.segs_per_zone)
 
 #endif	/*__F2FS_FS_H */

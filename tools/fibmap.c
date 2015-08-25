@@ -12,10 +12,7 @@
 #include <linux/hdreg.h>
 #include <linux/types.h>
 #include <linux/fs.h>
-
-#ifdef ANDROID
-#include "include/f2fs_version.h"
-#endif
+#include <inttypes.h>
 
 struct file_ext {
 	__u32 f_pos;
@@ -41,14 +38,17 @@ void fibmap_print_stat(struct stat64 *st)
 {
 	printf("--------------------------------------------\n");
 	printf("dev       [%d:%d]\n", major(st->st_dev), minor(st->st_dev));
-	printf("ino       [0x%8lx : %ld]\n", st->st_ino, st->st_ino);
+	printf("ino       [0x%8"PRIx64" : %"PRIu64"]\n",
+						st->st_ino, st->st_ino);
 	printf("mode      [0x%8x : %d]\n", st->st_mode, st->st_mode);
 	printf("nlink     [0x%8lx : %ld]\n", st->st_nlink, st->st_nlink);
 	printf("uid       [0x%8x : %d]\n", st->st_uid, st->st_uid);
 	printf("gid       [0x%8x : %d]\n", st->st_gid, st->st_gid);
-	printf("size      [0x%8lx : %ld]\n", st->st_size, st->st_size);
+	printf("size      [0x%8"PRIx64" : %"PRIu64"]\n",
+						st->st_size, st->st_size);
 	printf("blksize   [0x%8lx : %ld]\n", st->st_blksize, st->st_blksize);
-	printf("blocks    [0x%8lx : %ld]\n", st->st_blocks, st->st_blocks);
+	printf("blocks    [0x%8"PRIx64" : %"PRIu64"]\n",
+					st->st_blocks, st->st_blocks);
 	printf("--------------------------------------------\n\n");
 }
 
@@ -103,9 +103,6 @@ int fibmap_main(int argc, char *argv[])
 	struct file_ext ext;
 	__u32 start_lba;
 	__u32 blknum;
-
-	printf("\n\tF2FS-tools: fibmap.f2fs Ver: %s (%s)\n\n",
-	    F2FS_TOOLS_VERSION, F2FS_TOOLS_DATE);
 
 	if (argc != 2) {
 		fprintf(stderr, "No filename\n");

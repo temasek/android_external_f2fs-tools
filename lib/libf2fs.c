@@ -21,11 +21,7 @@
 #include <sys/ioctl.h>
 #include <linux/hdreg.h>
 
-#ifndef ANDROID
 #include <f2fs_fs.h>
-#else
-#include "include/f2fs_fs.h"
-#endif
 
 void ASCIIToUNICODE(u_int16_t *out_buf, u_int8_t *in_buf)
 {
@@ -357,14 +353,16 @@ void f2fs_init_configuration(struct f2fs_configuration *c)
 	c->blks_per_seg = DEFAULT_BLOCKS_PER_SEGMENT;
 
 	/* calculated by overprovision ratio */
-	c->reserved_segments = 48;
-	c->overprovision = 5;
+	c->reserved_segments = 0;
+	c->overprovision = 0;
 	c->segs_per_sec = 1;
 	c->secs_per_zone = 1;
+	c->segs_per_zone = 1;
 	c->heap = 1;
 	c->vol_label = "";
 	c->device_name = NULL;
 	c->trim = 1;
+	c->bytes_reserved = 0;
 }
 
 #ifndef ANDROID
@@ -424,10 +422,23 @@ int f2fs_dev_is_umounted(struct f2fs_configuration *c)
 }
 #endif
 
+void get_kernel_version(__u8 *version)
+{
+	int i;
+	for (i = 0; i < VERSION_LEN; i++) {
+		if (version[i] == '\n')
+			break;
+	}
+	memset(version + i, 0, VERSION_LEN + 1 - i);
+}
+
 int f2fs_get_device_info(struct f2fs_configuration *c)
 {
 	int32_t fd = 0;
 	uint32_t sector_size;
+#ifndef BLKGETSIZE64
+	uint32_t total_sectors;
+#endif
 	struct stat stat_buf;
 	struct hd_geometry geom;
 	u_int64_t wanted_total_sectors = c->total_sectors;
@@ -439,30 +450,74 @@ int f2fs_get_device_info(struct f2fs_configuration *c)
 	}
 	c->fd = fd;
 
+	c->kd = open("/proc/version", O_RDONLY);
+	if (c->kd < 0)
+		MSG(0, "\tInfo: No support kernel version!\n");
+
 	if (fstat(fd, &stat_buf) < 0 ) {
 		MSG(0, "\tError: Failed to get the device stat!\n");
 		return -1;
 	}
 
 	if (S_ISREG(stat_buf.st_mode)) {
-		c->total_sectors = stat_buf.st_size / c->sector_size;
+		if (c->bytes_reserved >= stat_buf.st_size) {
+			MSG(0, "\n\Error: reserved bytes (%u) is bigger than the device size (%u bytes)\n",
+			    (unsigned int) c->bytes_reserved,
+			    (unsigned int) stat_buf.st_size);
+			return -1;
+		}
+
+		c->total_sectors = (stat_buf.st_size - c->bytes_reserved) / c->sector_size;
+
+                if (c->bytes_reserved) {
+                        MSG(0, "Info: Reserved %u bytes ", (unsigned int) c->bytes_reserved);
+                        MSG(0, "from device of size %u sectors\n",
+			    (unsigned int) (stat_buf.st_size / c->sector_size));
+                }
 	} else if (S_ISBLK(stat_buf.st_mode)) {
 		if (ioctl(fd, BLKSSZGET, &sector_size) < 0) {
 			MSG(0, "\tError: Using the default sector size\n");
 		} else {
 			if (c->sector_size < sector_size) {
-				MSG(0, "\tError: Cannot set the sector size to:"
-					" %d as the device does not support"
-					"\nSetting the sector size to : %d\n",
-					c->sector_size, sector_size);
 				c->sector_size = sector_size;
 				c->sectors_per_blk = PAGE_SIZE / sector_size;
 			}
 		}
 
-		if (ioctl(fd, BLKGETSIZE, &c->total_sectors) < 0) {
+#ifdef BLKGETSIZE64
+		if (ioctl(fd, BLKGETSIZE64, &c->total_sectors) < 0) {
 			MSG(0, "\tError: Cannot get the device size\n");
 			return -1;
+		}
+		c->total_sectors /= c->sector_size;
+#else
+		if (ioctl(fd, BLKGETSIZE, &total_sectors) < 0) {
+			MSG(0, "\tError: Cannot get the device size\n");
+			return -1;
+		}
+		total_sectors /= c->sector_size;
+		c->total_sectors = total_sectors;
+#endif
+
+		if (c->bytes_reserved) {
+			unsigned int reserved_sectors;
+
+			reserved_sectors = c->bytes_reserved / c->sector_size;
+			if (c->bytes_reserved % c->sector_size) {reserved_sectors++;}
+
+			if(reserved_sectors >= c->total_sectors) {
+				MSG(0, "\n\Error: reserved bytes (%u sectors) is bigger than the device size (%u sectors)\n",
+				    (unsigned int) reserved_sectors,
+				    (unsigned int) c->total_sectors);
+				return -1;
+			}
+
+			MSG(0, "\n");
+			MSG(0, "Info: Reserved %u sectors ", (unsigned int) reserved_sectors);
+			MSG(0, "from device of size %u sectors\n",
+			    (unsigned int) c->total_sectors);
+
+			c->total_sectors -= reserved_sectors;
 		}
 
 		if (ioctl(fd, HDIO_GETGEO, &geom) < 0)
@@ -474,21 +529,14 @@ int f2fs_get_device_info(struct f2fs_configuration *c)
 		return -1;
 	}
 	if (wanted_total_sectors && wanted_total_sectors < c->total_sectors) {
-		MSG(0, "Info: total device sectors = %"PRIu64" (in 512bytes)\n",
-					c->total_sectors);
+		MSG(0, "Info: total device sectors = %"PRIu64" (in %u bytes)\n",
+					c->total_sectors, c->sector_size);
 		c->total_sectors = wanted_total_sectors;
 
 	}
 	MSG(0, "Info: sector size = %u\n", c->sector_size);
-	MSG(0, "Info: total sectors = %"PRIu64" (in 512bytes)\n",
-					c->total_sectors);
-	if (c->total_sectors <
-			(F2FS_MIN_VOLUME_SIZE / DEFAULT_SECTOR_SIZE)) {
-		MSG(0, "Error: Min volume size supported is %d\n",
-				F2FS_MIN_VOLUME_SIZE);
-		return -1;
-	}
-
+	MSG(0, "Info: total sectors = %"PRIu64" (%"PRIu64" MB)\n",
+				c->total_sectors, c->total_sectors >> 11);
 	return 0;
 }
 
